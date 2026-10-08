@@ -250,8 +250,9 @@
   var ADMIN_PW = '0825';
 
   // ===== 급식 설정 =====
-  // Vercel에 올린 급식 중계 주소 (배포 후 실제 주소로 바꾸세요)
-  var MEAL_API = 'https://meal-api-nine.vercel.app/api/meal';
+  // ===== 급식 설정 =====
+  // 구글 Apps Script로 배포한 급식 중계 주소 (배포 후 실제 주소로 바꾸세요)
+  var MEAL_API = 'https://script.google.com/macros/s/AKfycbzSkErvYfBXMqJjHedj9sjxEpSyLYJ264RUfTHoIBUfyj65WUJITn8MgxkrWorAkyDVtA/exec';
   var MEAL_KEY = 'classDashboard.meal';
   var MEAL_TYPE_KEY = 'classDashboard.mealType';
   var EMBLEM = document.querySelector('#brand img').src;
@@ -479,28 +480,28 @@
     return { from: compact(new Date(n.getFullYear(), n.getMonth(), 1)), to: compact(new Date(n.getFullYear(), n.getMonth() + 2, 0)) };
   }
   var mealRetry = null;
+  function mealFail(msg) {
+    meal.error = msg; saveMeal(); renderMeal();
+    clearTimeout(mealRetry);
+    mealRetry = setTimeout(function () { fetchMeal(true); }, 10 * 60 * 1000);   // 실패 시 10분 뒤 재시도
+  }
   function fetchMeal(force) {
     var today = compact(new Date());
     if (!force && meal.v === 2 && meal.fetchedFor === today && !meal.error) { renderMeal(); return; }
     if (!MEAL_API || MEAL_API.indexOf('여기에') >= 0) { meal.error = '급식 서버 주소가 아직 설정되지 않았어요'; renderMeal(); return; }
     var rg = mealRange();
-    function fail(msg) {
-      meal.error = msg; saveMeal(); renderMeal();
-      clearTimeout(mealRetry);
-      mealRetry = setTimeout(function () { fetchMeal(true); }, 10 * 60 * 1000);   // 실패 시 10분 뒤 재시도
-    }
     var xhr = new XMLHttpRequest();
     xhr.open('GET', MEAL_API + '?from=' + rg.from + '&to=' + rg.to, true);
-    xhr.timeout = 20000;
+    xhr.timeout = 30000;
     xhr.onload = function () {
       var j = null;
-      try { j = JSON.parse(xhr.responseText); } catch (e) { return fail('급식 응답을 읽을 수 없어요'); }
-      if (!j || !j.ok) return fail((j && j.error) || '급식을 불러오지 못했어요');
+      try { j = JSON.parse(xhr.responseText); } catch (e) { return mealFail('급식 응답을 읽을 수 없어요'); }
+      if (!j || !j.ok) return mealFail((j && j.error) || '급식을 불러오지 못했어요');
       meal = { v: 2, fetchedFor: today, days: j.days || {}, error: '' };
       saveMeal(); renderMeal();
     };
-    xhr.onerror = function () { fail('급식 서버에 연결할 수 없어요'); };
-    xhr.ontimeout = function () { fail('급식 서버 응답이 없어요'); };
+    xhr.onerror = function () { mealFail('급식 서버에 연결할 수 없어요'); };
+    xhr.ontimeout = function () { mealFail('급식 서버 응답이 없어요'); };
     xhr.send();
   }
 
