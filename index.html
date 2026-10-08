@@ -153,6 +153,9 @@
   .memo-text { font-size: 1.35rem; line-height: 1.5; white-space: pre-wrap; word-break: keep-all; }
   .pw-err { color: #A33A33; font-size: 1.1rem; min-height: 1.5rem; margin-top: 0.3rem; }
   .foot .admin-trig { cursor: pointer; }
+  #bkText { height: 11rem; font-family: monospace; font-size: 0.95rem; -webkit-user-select: text; user-select: text; word-break: break-all; }
+  .admin-menu .btn { display: block; width: 100%; margin: 0 0 0.7rem 0; padding: 0.9rem 1.2rem; font-size: 1.35rem; text-align: left; }
+  .bk-warn { color: #A33A33; font-size: 1.15rem; margin-top: 0.4rem; }
   .admin-ok { color: #1E7B34; font-size: 1.1rem; min-height: 1.5rem; margin-top: 0.3rem; }
   .foot { font-size: 0.9rem; color: var(--chalk-dim); text-align: right; padding-top: 0.6rem; opacity: 0.7; }
   .warn { color: var(--pink); }
@@ -218,7 +221,7 @@
     </aside>
   </div>
 
-  <div class="foot" id="foot">v1.5 · 제작 : 서령고등학교 교사 <span class="admin-trig" id="adminTrig">고민식</span></div>
+  <div class="foot" id="foot">v1.6 웹 · 제작 : 서령고등학교 교사 <span class="admin-trig" id="adminTrig">고민식</span></div>
 </div>
 
 <div class="tm-bg" id="tmBg">
@@ -242,16 +245,13 @@
   'use strict';
 
   var KEY = 'classDashboard.v1';
-  var VERSION = '1.5';
+  var VERSION = '1.6';
+  var VARIANT = '웹';
   var ADMIN_PW = '0825';
 
   // ===== 급식 설정 =====
-  var NEIS_KEY_STORE = 'classDashboard.neisKey';   // 인증키는 파일이 아니라 각 기기에 저장
-  function getNeisKey() { try { return window.localStorage.getItem(NEIS_KEY_STORE) || ''; } catch (e) { return ''; } }
-  function setNeisKey(k) { try { if (k) window.localStorage.setItem(NEIS_KEY_STORE, k); else window.localStorage.removeItem(NEIS_KEY_STORE); } catch (e) {} }
-  var OFFICE_CODE = 'N10';          // 충청남도교육청
-  var SCHOOL_NAME = '서령고등학교';
-  var SCHOOL_CODE = '';             // 비워두면 학교 이름으로 자동 검색
+  // Vercel에 올린 급식 중계 주소 (배포 후 실제 주소로 바꾸세요)
+  var MEAL_API = 'https://meal-api-nine.vercel.app/api/meal';
   var MEAL_KEY = 'classDashboard.meal';
   var MEAL_TYPE_KEY = 'classDashboard.mealType';
   var EMBLEM = document.querySelector('#brand img').src;
@@ -464,64 +464,44 @@
 
   function loadMeal() {
     try { var raw = window.localStorage.getItem(MEAL_KEY); if (raw) return JSON.parse(raw); } catch (e) {}
-    return { code: '', fetchedFor: '', days: {}, error: '' };
+    return { v: 2, fetchedFor: '', days: {}, error: '' };
   }
   var mealType = '중식';
   try { mealType = window.localStorage.getItem(MEAL_TYPE_KEY) || '중식'; } catch (e) {}
 
   function saveMeal() { try { window.localStorage.setItem(MEAL_KEY, JSON.stringify(meal)); } catch (e) {} }
 
-  function neis(path, params, done) {
-    var q = 'KEY=' + encodeURIComponent(getNeisKey()) + '&Type=json&pIndex=1&pSize=100';
-    for (var k in params) q += '&' + k + '=' + encodeURIComponent(params[k]);
-    var xhr = new XMLHttpRequest();
-    xhr.open('GET', 'https://open.neis.go.kr/hub/' + path + '?' + q, true);
-    xhr.timeout = 15000;
-    xhr.onload = function () {
-      var j = null;
-      try { j = JSON.parse(xhr.responseText); } catch (e) { return done('응답을 읽을 수 없어요'); }
-      if (j[path] && j[path][1] && j[path][1].row) return done(null, j[path][1].row);
-      if (j.RESULT && j.RESULT.CODE === 'INFO-200') return done(null, []);
-      done((j.RESULT && j.RESULT.MESSAGE) || '알 수 없는 오류');
-    };
-    xhr.onerror = function () { done('급식 서버에 연결할 수 없어요 (인터넷 또는 보안 제한)'); };
-    xhr.ontimeout = function () { done('급식 서버 응답이 없어요'); };
-    xhr.send();
-  }
-
-  function cleanMenu(str) {
-    return String(str).split(/<br\s*\/?>/i).map(function (x) {
-      return x.replace(/\([\d.\s]*\)/g, '').replace(/[*#@]+/g, '').replace(/\s*[\d.]+$/g, '').replace(/^\s+|\s+$/g, '');
-    }).filter(function (x) { return x.length > 0; });
-  }
-
   function compact(d) { return ymd(d).replace(/-/g, ''); }
 
-  function fetchMeal() {
-    if (!getNeisKey()) { meal.error = '급식 인증키가 아직 입력되지 않았어요'; renderMeal(); return; }
-    var code = SCHOOL_CODE || meal.code;
-    if (!code) {
-      neis('schoolInfo', { ATPT_OFCDC_SC_CODE: OFFICE_CODE, SCHUL_NM: SCHOOL_NAME }, function (err, rows) {
-        if (err) { meal.error = err; renderMeal(); return; }
-        if (!rows.length) { meal.error = '학교를 찾지 못했어요'; renderMeal(); return; }
-        meal.code = rows[0].SD_SCHUL_CODE; saveMeal(); fetchMeal();
-      });
-      return;
+  // 이번 달 1일 ~ 다음 달 말일을 한 번에 받고, 하루 한 번만 새로 받음
+  function mealRange() {
+    var n = new Date();
+    return { from: compact(new Date(n.getFullYear(), n.getMonth(), 1)), to: compact(new Date(n.getFullYear(), n.getMonth() + 2, 0)) };
+  }
+  var mealRetry = null;
+  function fetchMeal(force) {
+    var today = compact(new Date());
+    if (!force && meal.v === 2 && meal.fetchedFor === today && !meal.error) { renderMeal(); return; }
+    if (!MEAL_API || MEAL_API.indexOf('여기에') >= 0) { meal.error = '급식 서버 주소가 아직 설정되지 않았어요'; renderMeal(); return; }
+    var rg = mealRange();
+    function fail(msg) {
+      meal.error = msg; saveMeal(); renderMeal();
+      clearTimeout(mealRetry);
+      mealRetry = setTimeout(function () { fetchMeal(true); }, 10 * 60 * 1000);   // 실패 시 10분 뒤 재시도
     }
-    var from = new Date(), to = new Date(); to.setDate(to.getDate() + 10);
-    neis('mealServiceDietInfo', {
-      ATPT_OFCDC_SC_CODE: OFFICE_CODE, SD_SCHUL_CODE: code,
-      MLSV_FROM_YMD: compact(from), MLSV_TO_YMD: compact(to)
-    }, function (err, rows) {
-      if (err) { meal.error = err; renderMeal(); return; }
-      var days = {};
-      for (var i = 0; i < rows.length; i++) {
-        var r = rows[i];
-        (days[r.MLSV_YMD] = days[r.MLSV_YMD] || []).push({ type: r.MMEAL_SC_NM, menu: cleanMenu(r.DDISH_NM) });
-      }
-      meal.days = days; meal.fetchedFor = compact(new Date()); meal.error = '';
+    var xhr = new XMLHttpRequest();
+    xhr.open('GET', MEAL_API + '?from=' + rg.from + '&to=' + rg.to, true);
+    xhr.timeout = 20000;
+    xhr.onload = function () {
+      var j = null;
+      try { j = JSON.parse(xhr.responseText); } catch (e) { return fail('급식 응답을 읽을 수 없어요'); }
+      if (!j || !j.ok) return fail((j && j.error) || '급식을 불러오지 못했어요');
+      meal = { v: 2, fetchedFor: today, days: j.days || {}, error: '' };
       saveMeal(); renderMeal();
-    });
+    };
+    xhr.onerror = function () { fail('급식 서버에 연결할 수 없어요'); };
+    xhr.ontimeout = function () { fail('급식 서버 응답이 없어요'); };
+    xhr.send();
   }
 
   function renderMeal() {
@@ -550,7 +530,7 @@
 
   function renderFoot() {
     var f = $('foot');
-    if (storageOk) { f.className = 'foot'; f.innerHTML = 'v' + VERSION + ' · 제작 : 서령고등학교 교사 <span class="admin-trig" id="adminTrig">고민식</span>'; }
+    if (storageOk) { f.className = 'foot'; f.innerHTML = 'v' + VERSION + ' ' + VARIANT + ' · 제작 : 서령고등학교 교사 <span class="admin-trig" id="adminTrig">고민식</span>'; }
     else { f.className = 'foot warn'; f.textContent = '이 브라우저는 저장이 꺼져 있어 새로고침하면 내용이 사라집니다. 브라우저 설정에서 웹 저장소를 켜 주세요.'; }
   }
 
@@ -653,12 +633,48 @@
     setTimeout(function () { var el = $('adminPw'); if (el) el.focus(); }, 50);
   }
 
-  function adminKeyModal(msg) {
-    var html = '<h2>admin · 급식 인증키</h2>' +
-      '<div class="hint">NEIS 인증키를 입력하면 이 전자칠판에만 저장돼요. 파일에는 들어가지 않아요.</div>' +
-      '<div class="m-form"><input id="neisKeyIn" type="text" autocomplete="off" placeholder="인증키" value="' + esc(getNeisKey()) + '"></div>' +
-      '<div class="admin-ok" id="adminOk">' + (msg || '') + '</div>' +
-      '<div class="m-actions"><button class="btn del" data-act="clearKey">지우기</button><button class="btn" data-act="close">닫기</button><button class="btn primary" data-act="saveKey">저장</button></div>';
+  function adminMenuModal() {
+    var html = '<h2>admin</h2><div class="admin-menu">' +
+      '<button class="btn" data-act="adminBackup">백업하기 (내보내기)</button>' +
+      '<button class="btn" data-act="adminRestore">불러오기</button>' +
+      '</div><div class="m-actions"><button class="btn" data-act="close">닫기</button></div>';
+    openModal(html);
+  }
+
+  function backupText() {
+    return JSON.stringify({ app: 'classDashboard', v: 1, exported: ymd(new Date()), from: VARIANT, data: data, mealType: mealType });
+  }
+
+  function backupModal() {
+    var html = '<h2>admin · 백업하기</h2>' +
+      '<div class="hint">아래 내용을 복사한 뒤, 옮길 대시보드에서 admin → 불러오기에 붙여 넣으세요. 같은 전자칠판 안에서 앱끼리 옮길 때 쓸 수 있어요.</div>' +
+      '<textarea id="bkText" readonly>' + esc(backupText()) + '</textarea>' +
+      '<div class="admin-ok" id="adminOk"></div>' +
+      '<div class="m-actions"><button class="btn" data-act="adminMenu">뒤로</button><button class="btn primary" data-act="copyBk">복사</button></div>';
+    openModal(html);
+  }
+
+  var pendingRestore = null;
+  function restoreModal(err) {
+    pendingRestore = null;
+    var html = '<h2>admin · 불러오기</h2>' +
+      '<div class="hint">백업하기에서 복사한 내용을 아래 칸에 붙여 넣고 불러오기를 누르세요.</div>' +
+      '<textarea id="bkText" placeholder="여기에 붙여 넣기"></textarea>' +
+      '<div class="pw-err" id="pwErr">' + (err || '') + '</div>' +
+      '<div class="m-actions"><button class="btn" data-act="adminMenu">뒤로</button><button class="btn primary" data-act="checkRestore">불러오기</button></div>';
+    openModal(html);
+  }
+
+  function restoreConfirmModal(p) {
+    var d = p.data;
+    var html = '<h2>admin · 불러오기 확인</h2>' +
+      '<div class="hint">' + esc(p.exported || '') + ' ' + esc(p.from || '') + ' 대시보드에서 백업한 내용이에요.</div>' +
+      '<div class="m-row"><span>반 이름<small>' + esc(d.className || '') + '</small></span></div>' +
+      '<div class="m-row"><span>일정<small>' + d.events.length + '개</small></span></div>' +
+      '<div class="m-row"><span>D-day<small>' + d.ddays.length + '개</small></span></div>' +
+      '<div class="m-row"><span>담임 전달사항<small>' + d.notices.length + '줄</small></span></div>' +
+      '<div class="bk-warn">지금 이 대시보드에 있는 내용은 모두 지워지고 백업 내용으로 바뀌어요.</div>' +
+      '<div class="m-actions"><button class="btn" data-act="adminRestore">취소</button><button class="btn del" data-act="doRestore">덮어쓰기</button></div>';
     openModal(html);
   }
 
@@ -727,17 +743,47 @@
     },
     clearNotice: function () { $('noticeText').value = ''; },
     pwChange: function () { pwChangeModal(); },
+    adminMenu: function () { adminMenuModal(); },
+    adminBackup: function () { backupModal(); },
+    adminRestore: function () { restoreModal(); },
+    copyBk: function () {
+      var ta = $('bkText'), ok = false;
+      try { ta.removeAttribute('readonly'); ta.focus(); ta.select(); ta.setSelectionRange(0, ta.value.length); ok = document.execCommand('copy'); } catch (e) {}
+      ta.setAttribute('readonly', 'readonly');
+      $('adminOk').textContent = ok ? '복사됐어요. 옮길 대시보드의 불러오기에 붙여 넣으세요.' : '자동 복사가 안 돼요. 글상자를 길게 눌러 전체 선택 후 복사해 주세요.';
+    },
+    checkRestore: function () {
+      var t = $('bkText').value.replace(/^\s+|\s+$/g, ''), p = null;
+      if (!t) { $('pwErr').textContent = '붙여 넣은 내용이 없어요.'; return; }
+      try { p = JSON.parse(t); } catch (e) {}
+      var d = p && p.data;
+      if (!p || p.app !== 'classDashboard' || !d || !(d.events instanceof Array) || !(d.ddays instanceof Array) || !(d.notices instanceof Array)) {
+        $('pwErr').textContent = '대시보드 백업 내용이 아니거나 일부가 잘렸어요. 백업하기에서 다시 복사해 주세요.';
+        return;
+      }
+      pendingRestore = p;
+      restoreConfirmModal(p);
+    },
+    doRestore: function () {
+      var p = pendingRestore;
+      if (!p) { restoreModal(); return; }
+      var d = p.data, def = defaults();
+      for (var k in def) { if (!(k in d)) d[k] = def[k]; }
+      data = d; save();
+      if (p.mealType === '중식' || p.mealType === '석식') {
+        mealType = p.mealType;
+        try { window.localStorage.setItem(MEAL_TYPE_KEY, mealType); } catch (e) {}
+      }
+      pendingRestore = null;
+      view = new Date(); view.setDate(1);
+      renderAll();
+      openModal('<h2>불러오기 완료</h2><div class="hint">백업한 내용으로 바꿨어요.</div><div class="m-actions"><button class="btn primary" data-act="close">확인</button></div>');
+    },
+
     checkAdmin: function () {
-      if ($('adminPw').value === ADMIN_PW) { adminKeyModal(); }
+      if ($('adminPw').value === ADMIN_PW) { adminMenuModal(); }
       else { $('pwErr').textContent = '비밀번호가 맞지 않아요.'; $('adminPw').value = ''; $('adminPw').focus(); }
     },
-    saveKey: function () {
-      var k = $('neisKeyIn').value.replace(/^\s+|\s+$/g, '');
-      setNeisKey(k);
-      meal.error = ''; fetchMeal();
-      adminKeyModal(k ? '저장됐어요. 급식을 다시 불러와요.' : '인증키를 지웠어요.');
-    },
-    clearKey: function () { setNeisKey(''); meal.days = {}; meal.error = ''; saveMeal(); renderMeal(); adminKeyModal('인증키를 지웠어요.'); },
     savePw: function () {
       var cur = $('pwCur').value, n1 = $('pwNew').value, n2 = $('pwNew2').value, err = $('pwErr');
       if (cur !== (data.noticePw || '0000')) { err.textContent = '현재 비밀번호가 맞지 않아요.'; return; }
