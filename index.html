@@ -153,6 +153,26 @@
   .memo-text { font-size: 1.35rem; line-height: 1.5; white-space: pre-wrap; word-break: keep-all; }
   .pw-err { color: #A33A33; font-size: 1.1rem; min-height: 1.5rem; margin-top: 0.3rem; }
   .foot .admin-trig { cursor: pointer; }
+  .foot .sync-ok { color: var(--chalk-dim); }
+  .foot .sync-bad { color: var(--pink); }
+  .m-form select { -webkit-flex: 1; flex: 1; min-width: 8rem; font-size: 1.3rem; padding: 0.6rem 0.8rem; border: 1px solid #C3CCDD; border-radius: 0.5rem; margin: 0 0.6rem 0.6rem 0; font-family: inherit; background: #fff; }
+  .m-info { font-size: 1.15rem; color: #14254A; margin: 0.2rem 0 0.8rem; line-height: 1.6; }
+  .m-info b { color: #1A4FA8; }
+  .m-info .bad { color: #A33A33; }
+  .choice-row { display: -webkit-flex; display: flex; margin-bottom: 0.8rem; }
+  .choice-row .m-row { -webkit-flex: 1; flex: 1; display: block; border: 1px solid #DCE2EE; border-radius: 0.6rem; padding: 0.7rem 0.9rem; margin-right: 0.6rem; }
+  .choice-row .m-row:last-child { margin-right: 0; }
+  .choice-row h3 { font-size: 1.2rem; margin-bottom: 0.3rem; }
+  /* 호출 팝업 */
+  .call-bg { display: none; position: fixed; left: 0; top: 0; right: 0; bottom: 0; z-index: 40; background: rgba(5, 14, 36, 0.93); -webkit-align-items: center; align-items: center; -webkit-justify-content: center; justify-content: center; }
+  .call-bg.open { display: -webkit-flex; display: flex; }
+  .call-box { width: 80vw; max-width: 90rem; background: var(--panel); border: 0.4rem solid var(--yellow); border-radius: 1.6rem; padding: 2.6rem 3rem 2.2rem; text-align: center; }
+  .call-tag { display: inline-block; font-size: 2rem; font-weight: 800; color: var(--board); background: var(--yellow); border-radius: 3rem; padding: 0.3rem 2rem; -webkit-animation: callpulse 1s ease-in-out infinite; animation: callpulse 1s ease-in-out infinite; }
+  @-webkit-keyframes callpulse { 50% { opacity: 0.55; } }
+  @keyframes callpulse { 50% { opacity: 0.55; } }
+  .call-text { font-size: 4.6rem; font-weight: 800; line-height: 1.3; margin: 1.6rem 0 1.2rem; word-break: keep-all; }
+  .call-meta { font-size: 1.5rem; color: var(--chalk-dim); margin-bottom: 1.8rem; }
+  .call-ok { font-size: 2.4rem; font-weight: 800; min-width: 16rem; padding: 1rem 2.4rem; border-radius: 1rem; border: 0; background: var(--yellow); color: var(--board); }
   #bkText { height: 11rem; font-family: monospace; font-size: 0.95rem; -webkit-user-select: text; user-select: text; word-break: break-all; }
   .admin-menu .btn { display: block; width: 100%; margin: 0 0 0.7rem 0; padding: 0.9rem 1.2rem; font-size: 1.35rem; text-align: left; }
   .bk-warn { color: #A33A33; font-size: 1.15rem; margin-top: 0.4rem; }
@@ -238,6 +258,15 @@
   </div>
 </div>
 
+<div class="call-bg" id="callBg">
+  <div class="call-box">
+    <div class="call-tag">호출</div>
+    <div class="call-text" id="callText"></div>
+    <div class="call-meta" id="callMeta"></div>
+    <button class="call-ok" id="callOk">확인</button>
+  </div>
+</div>
+
 <div class="modal-bg" id="modalBg"><div class="modal" id="modal"></div></div>
 
 <script>
@@ -249,11 +278,13 @@
   var VARIANT = '웹';
   var ADMIN_PW = '0825';
 
-  // ===== 급식 설정 =====
-  // ===== 급식 설정 =====
-  // 구글 Apps Script로 배포한 급식 중계 주소 (배포 후 실제 주소로 바꾸세요)
-  var MEAL_API = 'https://script.google.com/macros/s/AKfycbzSkErvYfBXMqJjHedj9sjxEpSyLYJ264RUfTHoIBUfyj65WUJITn8MgxkrWorAkyDVtA/exec';
+  // ===== 서버 설정 =====
+  // 구글 Apps Script 웹 앱 주소 (급식·반 동기화·호출 공용, 배포 후 실제 주소로 바꾸세요)
+  var MEAL_API = 'https://script.google.com/macros/s/여기에-배포ID/exec';
   var MEAL_KEY = 'classDashboard.meal';
+  var BOARD_STORE = 'classDashboard.board';     // { cls:'2-3', key:'칠판 키' } — 칠판 안에만 저장
+  var SYNC_STORE = 'classDashboard.sync';       // { rev, base, last, err }
+  var CALLS_SEEN_STORE = 'classDashboard.callsSeen';
   var MEAL_TYPE_KEY = 'classDashboard.mealType';
   var EMBLEM = document.querySelector('#brand img').src;
   var WEEK = ['일', '월', '화', '수', '목', '금', '토'];
@@ -317,11 +348,12 @@
     } catch (e) { storageOk = false; }
     return defaults();
   }
-  function save() {
+  function saveLocalOnly() {
     try { window.localStorage.setItem(KEY, JSON.stringify(data)); storageOk = true; }
     catch (e) { storageOk = false; }
     renderFoot();
   }
+  function save() { saveLocalOnly(); scheduleSync(); }   // 반이 연결돼 있으면 서버에도 올림
 
   // ---------- 유틸 ----------
   function uid() { return 'x' + Date.now().toString(36) + Math.floor(Math.random() * 1e6).toString(36); }
@@ -529,9 +561,236 @@
     $('mealBox').innerHTML = html;
   }
 
+  // ---------- 반 동기화 ----------
+  function loadJSON(k) { try { var v = window.localStorage.getItem(k); return v ? JSON.parse(v) : null; } catch (e) { return null; } }
+  function storeJSON(k, v) { try { if (v === null) window.localStorage.removeItem(k); else window.localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} }
+  function clone(o) { return JSON.parse(JSON.stringify(o)); }
+
+  var board = loadJSON(BOARD_STORE);                                   // 연결 안 했으면 null → 지금처럼 칠판 안에서만 저장
+  var sync = loadJSON(SYNC_STORE) || { rev: -1, base: null, last: '', err: '' };
+  var syncBusy = false, syncAgain = false, syncTimer = null, pollTimer = null;
+  function saveSync() { storeJSON(SYNC_STORE, sync); }
+
+  function classList() {
+    var a = [];
+    for (var g = 1; g <= 3; g++) for (var c = 1; c <= 9; c++) a.push(g + '-' + c);
+    return a;
+  }
+
+  // 서버와 주고받는 부분만 골라냄
+  function syncPart(d) {
+    return { className: d.className || '', events: d.events || [], ddays: d.ddays || [],
+      notices: d.notices || [], noticePw: d.noticePw || '0000', holiOff: d.holiOff || {} };
+  }
+
+  // a(서버 기준) → b(지금 칠판)로 바뀐 내용만 뽑기
+  function diffData(a, b) {
+    a = syncPart(a || {}); b = syncPart(b || {});
+    var ops = { upsert: { events: [], ddays: [] }, remove: { events: [], ddays: [] }, set: {}, holiOff: {} }, n = 0, k, id, i;
+    var lists = ['events', 'ddays'];
+    for (i = 0; i < lists.length; i++) {
+      k = lists[i];
+      var am = {}, bm = {}, j;
+      for (j = 0; j < a[k].length; j++) am[a[k][j].id] = a[k][j];
+      for (j = 0; j < b[k].length; j++) bm[b[k][j].id] = b[k][j];
+      for (id in bm) if (!am[id] || JSON.stringify(am[id]) !== JSON.stringify(bm[id])) { ops.upsert[k].push(bm[id]); n++; }
+      for (id in am) if (!bm[id]) { ops.remove[k].push(id); n++; }
+    }
+    if (a.className !== b.className) { ops.set.className = b.className; n++; }
+    if (a.noticePw !== b.noticePw) { ops.set.noticePw = b.noticePw; n++; }
+    if (JSON.stringify(a.notices) !== JSON.stringify(b.notices)) { ops.set.notices = b.notices; n++; }
+    for (var day in b.holiOff) if (b.holiOff[day] && !a.holiOff[day]) { ops.holiOff[day] = true; n++; }
+    for (day in a.holiOff) if (a.holiOff[day] && !b.holiOff[day]) { ops.holiOff[day] = false; n++; }
+    return n ? ops : null;
+  }
+
+  // 서버와 같은 규칙으로 바뀐 내용 적용
+  function applyOps(d, ops) {
+    if (!ops) return d;
+    var lists = ['events', 'ddays'];
+    for (var i = 0; i < lists.length; i++) {
+      var k = lists[i], rm = (ops.remove && ops.remove[k]) || [], up = (ops.upsert && ops.upsert[k]) || [];
+      d[k] = (d[k] || []).filter(function (x) { return rm.indexOf(x.id) < 0; });
+      for (var j = 0; j < up.length; j++) {
+        var found = false;
+        for (var q = 0; q < d[k].length; q++) if (d[k][q].id === up[j].id) { d[k][q] = up[j]; found = true; break; }
+        if (!found) d[k].push(up[j]);
+      }
+    }
+    var st = ops.set || {};
+    if ('className' in st) d.className = st.className;
+    if ('noticePw' in st) d.noticePw = st.noticePw;
+    if ('notices' in st) d.notices = st.notices;
+    d.holiOff = d.holiOff || {};
+    for (var day in (ops.holiOff || {})) { if (ops.holiOff[day]) d.holiOff[day] = true; else delete d.holiOff[day]; }
+    return d;
+  }
+
+  function adoptSynced(s) {
+    var before = JSON.stringify(syncPart(data));
+    data.className = s.className || '우리 반';
+    data.events = s.events; data.ddays = s.ddays; data.notices = s.notices;
+    data.noticePw = s.noticePw || '0000'; data.holiOff = s.holiOff || {};
+    if (JSON.stringify(syncPart(data)) !== before) { saveLocalOnly(); renderAll(); }
+  }
+
+  function postApi(body, done) {
+    if (!MEAL_API || MEAL_API.indexOf('여기에') >= 0) return done('서버 주소가 아직 설정되지 않았어요');
+    var xhr = new XMLHttpRequest();
+    xhr.open('POST', MEAL_API, true);
+    xhr.setRequestHeader('Content-Type', 'text/plain;charset=utf-8');
+    xhr.timeout = 30000;
+    xhr.onload = function () {
+      var j = null;
+      try { j = JSON.parse(xhr.responseText); } catch (e) { return done('서버 응답을 읽을 수 없어요'); }
+      if (!j || !j.ok) return done((j && j.error) || '서버 오류');
+      done(null, j);
+    };
+    xhr.onerror = function () { done('서버에 연결할 수 없어요'); };
+    xhr.ontimeout = function () { done('서버 응답이 없어요'); };
+    xhr.send(JSON.stringify(body));
+  }
+
+  function scheduleSync() {
+    if (!board) return;
+    clearTimeout(syncTimer);
+    syncTimer = setTimeout(syncNow, 1500);
+  }
+
+  function syncNow() {
+    if (!board || !sync.base) return;
+    if (syncBusy) { syncAgain = true; return; }
+    var sent = syncPart(clone(data));
+    var ops = diffData(sync.base, sent);
+    var body = { action: 'sync', 'class': board.cls, boardKey: board.key, rev: sync.rev, version: 'v' + VERSION + ' ' + VARIANT };
+    if (ops) body.ops = ops;
+    syncBusy = true;
+    postApi(body, function (err, res) {
+      syncBusy = false;
+      if (err) { sync.err = err; saveSync(); renderFoot(); }
+      else {
+        sync.err = ''; sync.last = new Date().toISOString();
+        if (res.data) {
+          var extra = diffData(sent, data);                 // 보내는 동안 칠판에서 또 바뀐 내용
+          sync.base = syncPart(res.data);
+          adoptSynced(applyOps(clone(sync.base), extra));
+          if (extra) syncAgain = true;
+        }
+        sync.rev = res.rev;
+        saveSync(); renderFoot();
+        handleCalls(res.calls || []);
+      }
+      if (syncAgain) { syncAgain = false; scheduleSync(); }
+    });
+  }
+
+  function schedulePoll() {
+    clearTimeout(pollTimer);
+    if (!board) return;
+    pollTimer = setTimeout(function () { syncNow(); schedulePoll(); }, 55000 + Math.floor(Math.random() * 10000));   // 약 1분마다, 반마다 조금씩 어긋나게
+  }
+
+  function syncLabel() {
+    if (!board) return '';
+    return ' · <span class="' + (sync.err ? 'sync-bad">' + board.cls + ' 연결 끊김' : 'sync-ok">' + board.cls + ' 연결됨') + '</span>';
+  }
+
+  function isLocalEmpty() {
+    var d = syncPart(data);
+    var onlyDefaultDday = !d.ddays.length || (d.ddays.length === 1 && d.ddays[0].name === '수능');
+    return !d.events.length && !d.notices.length && onlyDefaultDday && (d.className === '우리 반' || !d.className) && !Object.keys(d.holiOff).length;
+  }
+
+  function linkBoard(cls, key, res, mode) {     // mode: 'server' 서버 내용 받기 / 'upload' 칠판 내용 올리기
+    board = { cls: cls, key: key }; storeJSON(BOARD_STORE, board);
+    sync = { rev: res.rev, base: syncPart(res.data), last: new Date().toISOString(), err: '' };
+    saveSync();
+    if (mode === 'server') adoptSynced(clone(sync.base));
+    else syncNow();
+    handleCalls(res.calls || []);
+    schedulePoll(); renderFoot();
+  }
+
+  function unlinkBoard() {
+    board = null; storeJSON(BOARD_STORE, null);
+    sync = { rev: -1, base: null, last: '', err: '' }; saveSync();
+    clearTimeout(pollTimer); clearTimeout(syncTimer);
+    renderFoot();
+  }
+
+  // ---------- 호출 ----------
+  var callsSeen = loadJSON(CALLS_SEEN_STORE) || [];
+  var callQueue = [], callShowing = null, alarmTimer = null;
+
+  function handleCalls(list) {
+    var ids = list.map(function (c) { return c.id; });
+    if (callShowing && ids.indexOf(callShowing.id) < 0) closeCall();          // 취소되거나 시간이 지난 호출은 닫음
+    callQueue = callQueue.filter(function (c) { return ids.indexOf(c.id) >= 0; });
+    for (var i = 0; i < list.length; i++) {
+      var c = list[i];
+      if (callsSeen.indexOf(c.id) >= 0 || (callShowing && callShowing.id === c.id)) continue;
+      var queued = false;
+      for (var q = 0; q < callQueue.length; q++) if (callQueue[q].id === c.id) queued = true;
+      if (!queued) callQueue.push(c);
+    }
+    showNextCall();
+  }
+
+  function showNextCall() {
+    if (callShowing || !callQueue.length) return;
+    callShowing = callQueue.shift();
+    var t = new Date(callShowing.created);
+    $('callText').textContent = callShowing.text;
+    $('callMeta').textContent = (callShowing.sender || '') + ' · ' + pad(t.getHours()) + ':' + pad(t.getMinutes());
+    $('callBg').className = 'call-bg open';
+    if (callShowing.sound) startAlarm();
+  }
+
+  function closeCall() {
+    if (callShowing) {
+      callsSeen.push(callShowing.id);
+      if (callsSeen.length > 100) callsSeen = callsSeen.slice(-100);
+      storeJSON(CALLS_SEEN_STORE, callsSeen);
+    }
+    stopAlarm();
+    callShowing = null;
+    $('callBg').className = 'call-bg';
+    showNextCall();
+  }
+
+  function callTone() {
+    try {
+      var AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return;
+      if (!audioCtx) audioCtx = new AC();
+      if (audioCtx.resume) audioCtx.resume();
+      var t0 = audioCtx.currentTime, f = [988, 784, 988, 784];
+      for (var i = 0; i < f.length; i++) {
+        var o = audioCtx.createOscillator(), g = audioCtx.createGain();
+        o.type = 'triangle'; o.frequency.value = f[i];
+        g.gain.setValueAtTime(0.0001, t0 + i * 0.22);
+        g.gain.exponentialRampToValueAtTime(0.5, t0 + i * 0.22 + 0.02);
+        g.gain.exponentialRampToValueAtTime(0.0001, t0 + i * 0.22 + 0.2);
+        o.connect(g); g.connect(audioCtx.destination);
+        o.start(t0 + i * 0.22); o.stop(t0 + i * 0.22 + 0.21);
+      }
+    } catch (e) {}
+  }
+  function startAlarm() {
+    stopAlarm();
+    var n = 0;
+    callTone();
+    alarmTimer = setInterval(function () { if (++n >= 15) stopAlarm(); else callTone(); }, 2000);   // 최대 30초
+  }
+  function stopAlarm() { clearInterval(alarmTimer); alarmTimer = null; }
+
+  function checkCallExpiry() {
+    if (callShowing && new Date(callShowing.expires) < new Date()) closeCall();
+  }
+
   function renderFoot() {
     var f = $('foot');
-    if (storageOk) { f.className = 'foot'; f.innerHTML = 'v' + VERSION + ' ' + VARIANT + ' · 제작 : 서령고등학교 교사 <span class="admin-trig" id="adminTrig">고민식</span>'; }
+    if (storageOk) { f.className = 'foot'; f.innerHTML = 'v' + VERSION + ' ' + VARIANT + syncLabel() + ' · 제작 : 서령고등학교 교사 <span class="admin-trig" id="adminTrig">고민식</span>'; }
     else { f.className = 'foot warn'; f.textContent = '이 브라우저는 저장이 꺼져 있어 새로고침하면 내용이 사라집니다. 브라우저 설정에서 웹 저장소를 켜 주세요.'; }
   }
 
@@ -636,9 +895,49 @@
 
   function adminMenuModal() {
     var html = '<h2>admin</h2><div class="admin-menu">' +
+      '<button class="btn" data-act="adminBoard">반 연결 (반 번호·칠판 키)</button>' +
       '<button class="btn" data-act="adminBackup">백업하기 (내보내기)</button>' +
       '<button class="btn" data-act="adminRestore">불러오기</button>' +
       '</div><div class="m-actions"><button class="btn" data-act="close">닫기</button></div>';
+    openModal(html);
+  }
+
+  var pendingLink = null;
+  function boardModal(msg, isErr, keep) {
+    keep = keep || {};
+    var html, opts = '';
+    if (board) {
+      var last = sync.last ? new Date(sync.last) : null;
+      html = '<h2>admin · 반 연결</h2>' +
+        '<div class="m-info">연결된 반: <b>' + esc(board.cls) + '</b><br>' +
+        '마지막 동기화: ' + (last ? (last.getMonth() + 1) + '월 ' + last.getDate() + '일 ' + pad(last.getHours()) + ':' + pad(last.getMinutes()) : '아직 없음') +
+        (sync.err ? '<br><span class="bad">' + esc(sync.err) + '</span>' : '') + '</div>' +
+        '<div class="hint">캘린더·D-day·담임 전달사항이 서버와 1분마다 맞춰지고, 교무실 호출을 받아요.</div>' +
+        '<div class="admin-ok" id="adminOk">' + (msg && !isErr ? esc(msg) : '') + '</div>' +
+        '<div class="pw-err" id="pwErr">' + (msg && isErr ? esc(msg) : '') + '</div>' +
+        '<div class="m-actions"><button class="btn del" data-act="unlinkBoard">연결 해제</button><button class="btn" data-act="adminMenu">뒤로</button><button class="btn primary" data-act="syncBoard">지금 동기화</button></div>';
+    } else {
+      var cl = classList();
+      for (var i = 0; i < cl.length; i++) opts += '<option value="' + cl[i] + '"' + (keep.cls === cl[i] ? ' selected' : '') + '>' + cl[i].replace('-', '학년 ') + '반</option>';
+      html = '<h2>admin · 반 연결</h2>' +
+        '<div class="hint">관리 시트에 적힌 이 반의 칠판 키를 입력하세요. 연결하면 캘린더·D-day·담임 전달사항을 교무실에서도 고칠 수 있고, 호출을 받을 수 있어요.</div>' +
+        '<div class="m-form"><select id="bdCls">' + opts + '</select><input id="bdKey" type="text" autocomplete="off" autocapitalize="off" placeholder="칠판 키" value="' + esc(keep.key || '') + '"></div>' +
+        '<div class="pw-err" id="pwErr">' + (msg ? esc(msg) : '') + '</div>' +
+        '<div class="m-actions"><button class="btn" data-act="adminMenu">뒤로</button><button class="btn primary" data-act="linkBoard">연결</button></div>';
+    }
+    openModal(html);
+  }
+
+  function linkChoiceModal(p) {
+    var s = syncPart(p.res.data), l = syncPart(data);
+    var html = '<h2>admin · 어떤 내용을 쓸까요?</h2>' +
+      '<div class="hint">' + esc(p.cls) + '반 서버에 이미 저장된 내용이 있어요. 어느 쪽 내용을 남길지 골라 주세요.</div>' +
+      '<div class="choice-row">' +
+      '<div class="m-row"><h3>서버 내용</h3><span>' + esc(s.className || '') + '<small>일정 ' + s.events.length + ' · D-day ' + s.ddays.length + ' · 전달사항 ' + s.notices.length + '줄</small></span></div>' +
+      '<div class="m-row"><h3>이 칠판 내용</h3><span>' + esc(l.className || '') + '<small>일정 ' + l.events.length + ' · D-day ' + l.ddays.length + ' · 전달사항 ' + l.notices.length + '줄</small></span></div>' +
+      '</div>' +
+      '<div class="bk-warn">고르지 않은 쪽의 내용은 지워져요.</div>' +
+      '<div class="m-actions"><button class="btn" data-act="adminBoard">취소</button><button class="btn" data-act="linkUpload">이 칠판 내용 올리기</button><button class="btn primary" data-act="linkServer">서버 내용 받기</button></div>';
     openModal(html);
   }
 
@@ -745,6 +1044,27 @@
     clearNotice: function () { $('noticeText').value = ''; },
     pwChange: function () { pwChangeModal(); },
     adminMenu: function () { adminMenuModal(); },
+    adminBoard: function () { boardModal(); },
+    linkBoard: function () {
+      var cls = $('bdCls').value, key = $('bdKey').value.replace(/\s+/g, '');
+      if (!key) { $('pwErr').textContent = '칠판 키를 입력해 주세요.'; return; }
+      $('pwErr').textContent = '연결하는 중이에요…';
+      postApi({ action: 'sync', 'class': cls, boardKey: key, rev: -1, version: 'v' + VERSION + ' ' + VARIANT }, function (err, res) {
+        if (err) { boardModal(err, true, { cls: cls, key: key }); return; }
+        if (res.rev === 0) { linkBoard(cls, key, res, 'upload'); boardModal('연결됐어요. 이 칠판 내용을 서버에 올렸어요.'); }
+        else if (isLocalEmpty()) { linkBoard(cls, key, res, 'server'); boardModal('연결됐어요. 서버에 있던 ' + cls + '반 내용을 받아왔어요.'); }
+        else { pendingLink = { cls: cls, key: key, res: res }; linkChoiceModal(pendingLink); }
+      });
+    },
+    linkServer: function () { var p = pendingLink; pendingLink = null; if (!p) return boardModal(); linkBoard(p.cls, p.key, p.res, 'server'); boardModal('연결됐어요. 서버 내용으로 바꿨어요.'); },
+    linkUpload: function () { var p = pendingLink; pendingLink = null; if (!p) return boardModal(); linkBoard(p.cls, p.key, p.res, 'upload'); boardModal('연결됐어요. 이 칠판 내용을 서버에 올렸어요.'); },
+    syncBoard: function () {
+      $('adminOk').textContent = '동기화하는 중이에요…';
+      var prev = sync.last;
+      syncNow();
+      setTimeout(function () { if ($('adminOk')) boardModal(sync.err ? sync.err : (sync.last !== prev ? '동기화했어요.' : '동기화 요청을 보냈어요.'), !!sync.err); }, 2500);
+    },
+    unlinkBoard: function () { unlinkBoard(); boardModal('연결을 해제했어요. 지금까지의 내용은 이 칠판에 그대로 남아 있어요.'); },
     adminBackup: function () { backupModal(); },
     adminRestore: function () { restoreModal(); },
     copyBk: function () {
@@ -993,9 +1313,15 @@
     ensureTick(); renderTm();
   });
 
+  $('callOk').addEventListener('click', function () { closeCall(); });
+  document.addEventListener('touchstart', unlockAudio, true);   // 한 번이라도 터치하면 호출 알람이 울릴 수 있게
+  document.addEventListener('click', unlockAudio, true);
+
   renderAll();
   renderClock();
   setInterval(renderClock, 5000);
+  setInterval(checkCallExpiry, 5000);
+  if (board && sync.base) { syncNow(); schedulePoll(); }
   fetchMeal();
   setInterval(fetchMeal, 30 * 60 * 1000);
 })();
