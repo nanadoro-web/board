@@ -241,7 +241,7 @@
     </aside>
   </div>
 
-  <div class="foot" id="foot">v1.6 웹 · 제작 : 서령고등학교 교사 <span class="admin-trig" id="adminTrig">고민식</span></div>
+  <div class="foot" id="foot">v1.7 웹 · 제작 : 서령고등학교 교사 <span class="admin-trig" id="adminTrig">고민식</span></div>
 </div>
 
 <div class="tm-bg" id="tmBg">
@@ -274,7 +274,7 @@
   'use strict';
 
   var KEY = 'classDashboard.v1';
-  var VERSION = '1.6';
+  var VERSION = '1.7';
   var VARIANT = '웹';
   var ADMIN_PW = '0825';
 
@@ -511,11 +511,13 @@
     var n = new Date();
     return { from: compact(new Date(n.getFullYear(), n.getMonth(), 1)), to: compact(new Date(n.getFullYear(), n.getMonth() + 2, 0)) };
   }
-  var mealRetry = null;
+  var mealRetry = null, mealFails = 0;
   function mealFail(msg) {
-    meal.error = msg; saveMeal(); renderMeal();
+    meal.error = msg; saveMeal(); renderMeal();       // 전에 받아 둔 급식은 그대로 보여 줌
     clearTimeout(mealRetry);
-    mealRetry = setTimeout(function () { fetchMeal(true); }, 10 * 60 * 1000);   // 실패 시 10분 뒤 재시도
+    var wait = Math.min(10 * 60 * 1000, 20000 * Math.pow(2, mealFails));   // 20초 → 40초 → 80초 … 최대 10분
+    mealFails++;
+    mealRetry = setTimeout(function () { fetchMeal(true); }, wait);
   }
   function fetchMeal(force) {
     var today = compact(new Date());
@@ -530,6 +532,7 @@
       try { j = JSON.parse(xhr.responseText); } catch (e) { return mealFail('급식 응답을 읽을 수 없어요'); }
       if (!j || !j.ok) return mealFail((j && j.error) || '급식을 불러오지 못했어요');
       meal = { v: 2, fetchedFor: today, days: j.days || {}, error: '' };
+      mealFails = 0; clearTimeout(mealRetry);
       saveMeal(); renderMeal();
     };
     xhr.onerror = function () { mealFail('급식 서버에 연결할 수 없어요'); };
@@ -568,7 +571,7 @@
 
   var board = loadJSON(BOARD_STORE);                                   // 연결 안 했으면 null → 지금처럼 칠판 안에서만 저장
   var sync = loadJSON(SYNC_STORE) || { rev: -1, base: null, last: '', err: '' };
-  var syncBusy = false, syncAgain = false, syncTimer = null, pollTimer = null;
+  var syncBusy = false, syncAgain = false, syncTimer = null, pollTimer = null, retryTimer = null, syncFails = 0;
   function saveSync() { storeJSON(SYNC_STORE, sync); }
 
   function classList() {
@@ -667,8 +670,15 @@
     syncBusy = true;
     postApi(body, function (err, res) {
       syncBusy = false;
-      if (err) { sync.err = err; saveSync(); renderFoot(); }
+      if (err) {
+        sync.err = err; saveSync(); renderFoot();
+        // 연결이 안 되면 1분 기다리지 않고 10초 → 20초 → 40초 간격으로 다시 시도
+        clearTimeout(retryTimer);
+        retryTimer = setTimeout(syncNow, Math.min(55000, 10000 * Math.pow(2, syncFails)));
+        syncFails++;
+      }
       else {
+        syncFails = 0; clearTimeout(retryTimer);
         sync.err = ''; sync.last = new Date().toISOString();
         if (res.data) {
           var extra = diffData(sent, data);                 // 보내는 동안 칠판에서 또 바뀐 내용
@@ -1370,6 +1380,19 @@
   if (board && sync.base) { syncNow(); schedulePoll(); }
   fetchMeal();
   setInterval(fetchMeal, 30 * 60 * 1000);
+
+  // 와이파이가 다시 연결되면 바로 급식·동기화·즉시 알림을 다시 시도
+  window.addEventListener('online', function () {
+    if (meal.error || meal.fetchedFor !== compact(new Date())) { mealFails = 0; fetchMeal(true); }
+    if (board && sync.base) { syncFails = 0; syncNow(); }
+  });
+
+  // 인터넷이 늦게 연결돼도 대시보드가 열리도록 이 페이지를 칠판에 저장해 둠 (sw.js)
+  try {
+    if ('serviceWorker' in navigator && window.location.protocol === 'https:') {
+      navigator.serviceWorker.register('sw.js').then(null, function () {});
+    }
+  } catch (e) {}
 })();
 </script>
 </body>
